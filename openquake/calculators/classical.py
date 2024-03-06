@@ -110,7 +110,7 @@ def to_rates(pnemap, gid=0, tiling=True):
     """
     if tiling and hasattr(pnemap, 'to_rates'):  # not already converted
         rates = pnemap.to_rates(gid)  # zlib is faster than gzip
-        return {n: zlib.compress(rates[n].tobytes()) for n in rates}
+        return zlib.compress(rates.tobytes())
     return pnemap
 
 #  ########################### task functions ############################ #
@@ -290,24 +290,19 @@ class Hazard:
         """
         Store pnes inside the _rates dataset
         """
-        if isinstance(pnemap, dict):  # compressed
-            rates = {
-                n: numpy.frombuffer(zlib.decompress(pnemap[n]), rates_dt[n])
-                for n in rates_dt.names}
+        if isinstance(pnemap, bytes):  # compressed
+            rates = numpy.frombuffer(zlib.decompress(pnemap), rates_dt)
         else:
             rates = pnemap.to_rates()
-        if len(rates['sid']) == 0:  # happens in case_60
+        if len(rates) == 0:  # happens in case_60
             return self.offset * 12 
-        hdf5.extend(self.datastore['_rates/sid'], rates['sid'])
-        hdf5.extend(self.datastore['_rates/gid'], rates['gid'])
-        hdf5.extend(self.datastore['_rates/lid'], rates['lid'])
-        hdf5.extend(self.datastore['_rates/rate'], rates['rate'])
+        hdf5.extend(self.datastore['_rates/data'], rates)
 
         # slice_by_sid contains 3 slices in classical/case_22
         sbs = build_slice_by_sid(rates['sid'].copy(), self.offset)
         hdf5.extend(self.datastore['_rates/slice_by_sid'], sbs)
-        self.offset += len(rates['sid'])
 
+        self.offset += len(rates)
         self.acc['nsites'] = self.offset
         return self.offset * 12  # 4 + 2 + 2 + 4 bytes
 
@@ -405,8 +400,7 @@ class ClassicalCalculator(base.HazardCalculator):
         self.cmakers = read_cmakers(self.datastore, self.csm)
         self.cfactor = numpy.zeros(3)
         self.rel_ruptures = AccumDict(accum=0)  # grp_id -> rel_ruptures
-        self.datastore.create_df(
-            '_rates', [(n, rates_dt[n]) for n in rates_dt.names], 'gzip')
+        self.datastore.create_dset('_rates/data', rates_dt, compression='gzip')
         self.datastore.create_dset('_rates/slice_by_sid', slice_dt,
                                    compression='gzip')
 

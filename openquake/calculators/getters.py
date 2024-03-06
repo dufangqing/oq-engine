@@ -191,7 +191,7 @@ class PmapGetter(object):
             return self._pmap
         G = len(self.trt_rlzs)
         with hdf5.File(self.filename) as dstore:
-            rates_df = dstore.read_df('_rates', slices=self.slices)
+            rates_df = dstore.read_df('_rates/data', slices=self.slices)
             for sid, df in rates_df.groupby('sid'):
                 try:
                     array = self._pmap[sid].array
