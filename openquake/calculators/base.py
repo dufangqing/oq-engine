@@ -40,7 +40,6 @@ from openquake.hazardlib import (
 from openquake.hazardlib.site_amplification import Amplifier
 from openquake.hazardlib.site_amplification import AmplFunction
 from openquake.hazardlib.calc.filters import SourceFilter, getdefault
-from openquake.hazardlib.calc.disagg import to_rates
 from openquake.hazardlib.source import rupture
 from openquake.hazardlib.shakemap.maps import get_sitecol_shakemap
 from openquake.hazardlib.shakemap.gmfs import to_gmfs
@@ -584,8 +583,8 @@ class HazardCalculator(BaseCalculator):
                 oq, self.datastore.hdf5)
             self.load_crmodel()  # must be after get_site_collection
             self.read_exposure(haz_sitecol)  # define .assets_by_site
-            df = (~readinput.Global.pmap).to_dframe()
-            self.datastore.create_df('_rates', df)
+            rates = (~readinput.Global.pmap).to_rates()
+            self.datastore.create_dset('_rates/data', rates, fillvalue=None)
             self.datastore['assetcol'] = self.assetcol
             self.datastore['full_lt'] = fake = logictree.FullLogicTree.fake()
             self.datastore['trt_rlzs'] = U32([[0]])
@@ -1068,7 +1067,7 @@ class RiskCalculator(HazardCalculator):
         full_lt = dstore['full_lt'].init()
         out = []
         asset_df = self.assetcol.to_dframe('site_id')
-        slices = performance.get_slices(dstore['_rates/sid'][:])
+        slices = performance.get_slices(dstore['_rates/data']['sid'])
         for sid, assets in asset_df.groupby(asset_df.index):
             # hcurves, shape (R, N)
             getter = getters.PmapGetter(
