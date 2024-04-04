@@ -24,10 +24,7 @@ from scipy import interpolate
 from openquake.hazardlib.calc.mean_rates import to_rates
 from openquake.hazardlib.imt import from_string
 from openquake.calculators.extract import get_info
-try:
-    from PIL import Image
-except ImportError:
-    Image = None
+from PIL import Image
 
 
 def import_plt():
@@ -130,7 +127,7 @@ def plot_mean_hcurves_rtgm(dstore, site_idx=0, plot_mce=False,
         plt.loglog(imls[i], AFE[i], color=colors(i), linestyle=patterns[i],
                    label=lab, linewidth=3, zorder=1)
         
-        if plot_mce==True:
+        if plot_mce:
         # plot the label only once but it must be at the end of the legend
             if imt == imts[-1]:
                 plt.loglog([rtgm_probmce[i]], [afe_RTGM[i]], 'ko',
@@ -207,8 +204,10 @@ def plot_governing_mce(dstore, site_idx=0, update_dstore=False):
              label='$S_{S,RT}$ and $S_{1,RT}$', linewidth=3)
     MCEr_det = [dic['PGA_84th'], dic['Ss_84th'], dic['S1_84th']]
     if any([val == 'n.a.' for val in MCEr_det]):  # hazard is lower than DLLs
+        upperlim = max([rtgm_probmce[1], 1.5])
         plt.ylim([0, numpy.max([rtgm_probmce, MCEr, limit_det]) + 0.2])
     else:
+        upperlim = max([rtgm_probmce[1], 1.5, MCEr_det[1]])
         plt.plot(T[0], MCEr_det[0], 'c^', markersize=10, label='$PGA_{84th}$',
                  linewidth=3)
         plt.plot(T[1:], MCEr_det[1:], 'cd', markersize=10,
@@ -227,7 +226,6 @@ def plot_governing_mce(dstore, site_idx=0, update_dstore=False):
     plt.xlim([-0.02, 1.2])
 
     # add user guide message
-    upperlim = max([rtgm_probmce[1], 1.5, MCEr_det[1]])
     message = 'See WebUI User Guide for complete explanation of plot contents.'
     plt.text(0.03, -upperlim*0.22, message, fontsize='small', color='black', alpha=0.85 )
 

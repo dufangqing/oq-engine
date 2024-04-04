@@ -341,6 +341,7 @@ POLYGON((78.0 31.5, 89.5 31.5, 89.5 25.5, 78.0 25.5, 78.0 31.5))'''
         oqparam.time_event = None
         oqparam.ignore_missing_costs = []
         oqparam.aggregate_by = []
+        oqparam.aristotle = False
 
         with self.assertRaises(Exception) as ctx:
             readinput.get_exposure(oqparam)
@@ -359,6 +360,7 @@ POLYGON((78.0 31.5, 89.5 31.5, 89.5 25.5, 78.0 25.5, 78.0 31.5))'''
         oqparam.time_event = None
         oqparam.ignore_missing_costs = []
         oqparam.aggregate_by = []
+        oqparam.aristotle = False
 
         with self.assertRaises(ValueError) as ctx:
             readinput.get_exposure(oqparam)
@@ -376,6 +378,7 @@ POLYGON((78.0 31.5, 89.5 31.5, 89.5 25.5, 78.0 25.5, 78.0 31.5))'''
         oqparam.time_event = None
         oqparam.ignore_missing_costs = []
         oqparam.aggregate_by = []
+        oqparam.aristotle = False
         with self.assertRaises(ValueError) as ctx:
             readinput.get_exposure(oqparam)
         self.assertIn(r"Invalid ID 'a 1': the only accepted chars are "
@@ -393,6 +396,7 @@ POLYGON((68.0 31.5, 69.5 31.5, 69.5 25.5, 68.0 25.5, 68.0 31.5))'''
         oqparam.inputs = {'exposure': [self.exposure2],
                           'structural_vulnerability': None}
         oqparam.aggregate_by = []
+        oqparam.aristotle = False
         with self.assertRaises(ValueError) as ctx:
             readinput.get_exposure(oqparam)
         self.assertIn("Got 'aggregate', expected "
@@ -412,6 +416,7 @@ POLYGON((78.0 31.5, 89.5 31.5, 89.5 25.5, 78.0 25.5, 78.0 31.5))'''
         oqparam.insurance_losses = False
         oqparam.ignore_missing_costs = []
         oqparam.aggregate_by = []
+        oqparam.aristotle = False
         with self.assertRaises(ValueError) as ctx:
             readinput.get_exposure(oqparam)
         self.assertIn("'RM ' contains whitespace chars, line 11",
@@ -568,18 +573,19 @@ class ReadGeometryTestCase(unittest.TestCase):
         mosaic_dir = os.path.dirname(mosaic.__file__)
         geom_df = readinput.read_mosaic_df()
         self.assertEqual(len(geom_df), 30)
-        sites_df = pandas.read_csv(os.path.join(mosaic_dir, 'scenarios.csv'),
-                                   usecols=['lat', 'lon'])
+        sites_df = pandas.read_csv(
+            os.path.join(mosaic_dir, 'famous_ruptures.csv'),
+            usecols=['lat', 'lon'])
         lonlats = sites_df[['lon', 'lat']].to_numpy()
         sites_df['code'] = geolocate(lonlats, geom_df)
         t1 = time.time()
-        self.assertEqual(len(sites_df), 108)
+        self.assertEqual(len(sites_df), 90)
         print('Associated in %.1f seconds' % (t1-t0), sites_df)
 
         t0 = time.time()
-        risk_df = readinput.read_global_risk_df()  # this is slow
+        risk_df = readinput.read_countries_df()  # this is slow
         self.assertEqual(len(risk_df), 218)
         sites_df['code'] = geolocate(lonlats, risk_df)  # this is fast
         t1 = time.time()
-        self.assertEqual(len(sites_df), 108)
+        self.assertEqual(len(sites_df), 90)
         print('Associated in %.1f seconds' % (t1-t0), sites_df)

@@ -25,8 +25,9 @@ from openquake.baselib import hdf5, python3compat, general, writers
 from openquake.hazardlib.site import SiteCollection
 from openquake.hazardlib import valid, contexts, calc
 from openquake.hazardlib.source.multi_fault import (
-    MultiFaultSource, build_secparams, save, load)
+    MultiFaultSource, save, load)
 from openquake.hazardlib.geo.surface import KiteSurface
+from openquake.hazardlib.geo.surface.multi import build_secparams
 from openquake.hazardlib.tests.geo.surface import kite_fault_test as kst
 from openquake.hazardlib.sourcewriter import write_source_model
 from openquake.hazardlib.sourceconverter import SourceGroup
@@ -84,8 +85,7 @@ class MultiFaultTestCase(unittest.TestCase):
     def test_ok(self):
         # test instantiation
         src = MultiFaultSource("01", "test", "Moon Crust",
-                               self.pmfs, self.mags, self.rakes)
-        src._rupture_idxs = self.rup_idxs
+                               self.rup_idxs, self.pmfs, self.mags, self.rakes)
         src.mutex_weight = 1.
 
         # test conversion into XML
@@ -113,7 +113,7 @@ class MultiFaultTestCase(unittest.TestCase):
 
         # test rupture generation
         secparams = build_secparams(src.get_sections())
-        src.set_msparams(secparams)
+        src.set_msparams(secparams, ry0=True)
         rups = list(src.iter_ruptures())
         self.assertEqual(7, len(rups))
 
@@ -157,8 +157,7 @@ class MultiFaultTestCase(unittest.TestCase):
         # test invalid section IDs
         rup_idxs = [[0], [1], [3], [0], [1], [3], [0]]
         mfs = MultiFaultSource("01", "test", "Moon Crust",
-                               self.pmfs, self.mags, self.rakes)
-        mfs._rupture_idxs = rup_idxs
+                               rup_idxs, self.pmfs, self.mags, self.rakes)
         with self.assertRaises(IndexError) as ctx:
             save([mfs], self.sections, 'dummy.hdf5')
         self.assertEqual(str(ctx.exception),
@@ -172,11 +171,12 @@ class MultiFaultTestCase(unittest.TestCase):
         sitecol._set('vs30measured', 1)
         sitecol._set('z1pt0', 100.)
         sitecol._set('z2pt5', 5.)
-
         gsim = valid.gsim('AbrahamsonEtAl2014NSHMPMean')
         cmaker = contexts.simple_cmaker([gsim], ['PGA'])
+        sf = calc.filters.SourceFilter(sitecol, cmaker.maximum_distance)
         secparams = build_secparams(src.get_sections())
-        src.set_msparams(secparams)
+        nsites = sf.get_close(secparams)
+        src.set_msparams(secparams, nsites > 0, ry0=True)
         [ctxt] = cmaker.from_srcs([src], sitecol)
         print(cmaker.ir_mon)
         print(cmaker.ctx_mon)
@@ -193,11 +193,8 @@ class MultiFaultTestCase(unittest.TestCase):
             for col in df.columns:
                 if col == 'probs_occur:2':
                     continue
-                try:
-                    aac(df[col].to_numpy(), ctx[col], rtol=1E-5, equal_nan=1)
-                except Exception:
-                    print('Look at col')
-                    # breakpoint()
+                print(col)
+                aac(df[col].to_numpy(), ctx[col], rtol=1E-5, equal_nan=1)
 
 
 def main100sites():
@@ -213,7 +210,7 @@ def main100sites():
     cmaker = contexts.simple_cmaker([gsim], ['PGA'])
     secparams = build_secparams(src.get_sections())
     srcfilter = calc.filters.SourceFilter(sitecol, cmaker.maximum_distance)
-    src.set_msparams(secparams)
+    src.set_msparams(secparams, ry0=True)
     sites = srcfilter.get_close_sites(src)
     with cProfile.Profile() as prof:
         list(cmaker.get_ctx_iter(src, sites))

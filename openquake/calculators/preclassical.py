@@ -26,8 +26,8 @@ from openquake.baselib import general, parallel, hdf5
 from openquake.hazardlib import pmf, geo, source_reader
 from openquake.baselib.general import AccumDict, groupby, block_splitter
 from openquake.hazardlib.contexts import read_cmakers
+from openquake.hazardlib.geo.surface.multi import build_secparams
 from openquake.hazardlib.source.point import grid_point_sources, msr_name
-from openquake.hazardlib.source.multi_fault import build_secparams
 from openquake.hazardlib.source.base import get_code2cls
 from openquake.hazardlib.sourceconverter import SourceGroup
 from openquake.hazardlib.calc.filters import (
@@ -101,17 +101,26 @@ def preclassical(srcs, sites, cmaker, secparams, monitor):
     spacing = cmaker.ps_grid_spacing
     grp_id = srcs[0].grp_id
     if sites:
+        N = len(sites)
         multiplier = 1 + len(sites) // 10_000
         sf = SourceFilter(sites, cmaker.maximum_distance).reduce(multiplier)
     else:
+        N = 1
         multiplier = 1
         sf = None
     splits = []
     mon1 = monitor('building top of ruptures', measuremem=True)
     mon2 = monitor('setting msparams', measuremem=False)
+    ry0 = 'ry0' in cmaker.REQUIRES_DISTANCES
     for src in srcs:
         if src.code == b'F':
-            src.set_msparams(secparams, mon1, mon2)
+            if N <= cmaker.max_sites_disagg:
+                mask = sf.get_close(secparams) > 0  # shape S
+            else:
+                mask = None
+            src.set_msparams(secparams, mask, ry0, mon1, mon2)
+            if (src.msparams['area'] == 0).all():
+                continue # all ruptures are far away
         if sites:
             # NB: this is approximate, since the sites are sampled
             src.nsites = len(sf.close_sids(src))  # can be 0
@@ -124,31 +133,32 @@ def preclassical(srcs, sites, cmaker, secparams, monitor):
             splits.extend(split_source(src))
         else:
             splits.append(src)
-    splits = _filter(splits, cmaker.oq.minimum_magnitude)
-    mon = monitor('weighting sources', measuremem=False)
-    if sites is None or spacing == 0:
-        if sites is None:
-            for src in splits:
-                src.weight = .01
-        else:
-            cmaker.set_weight(splits, sf, multiplier, mon)
-        dic = {grp_id: splits}
-        dic['before'] = len(srcs)
-        dic['after'] = len(splits)
-        yield dic
-    else:
-        cnt = 0
-        for msr, block in groupby(splits, msr_name).items():
-            dic = grid_point_sources(block, spacing, msr, cnt, monitor)
-            cnt = dic.pop('cnt')
-            for src in dic[grp_id]:
-                src.num_ruptures = src.count_ruptures()
-            # this is also prefiltering the split sources
-            cmaker.set_weight(dic[grp_id], sf, multiplier, mon)
-            # print(f'{mon.task_no=}, {mon.duration=}')
-            dic['before'] = len(block)
-            dic['after'] = len(dic[grp_id])
+    if splits:
+        splits = _filter(splits, cmaker.oq.minimum_magnitude)
+        mon = monitor('weighting sources', measuremem=False)
+        if sites is None or spacing == 0:
+            if sites is None:
+                for src in splits:
+                    src.weight = .01
+            else:
+                cmaker.set_weight(splits, sf, multiplier, mon)
+            dic = {grp_id: splits}
+            dic['before'] = len(srcs)
+            dic['after'] = len(splits)
             yield dic
+        else:
+            cnt = 0
+            for msr, block in groupby(splits, msr_name).items():
+                dic = grid_point_sources(block, spacing, msr, cnt, monitor)
+                cnt = dic.pop('cnt')
+                for src in dic[grp_id]:
+                    src.num_ruptures = src.count_ruptures()
+                # this is also prefiltering the split sources
+                cmaker.set_weight(dic[grp_id], sf, multiplier, mon)
+                # print(f'{mon.task_no=}, {mon.duration=}')
+                dic['before'] = len(block)
+                dic['after'] = len(dic[grp_id])
+                yield dic
 
 
 @base.calculators.add('preclassical')
@@ -187,6 +197,13 @@ class PreClassicalCalculator(base.HazardCalculator):
         self.sitecol = sites = csm.sitecol if csm.sitecol else None
         if sites is None:
             logging.warning('No sites??')
+
+        L = oq.imtls.size
+        Gt = len(self.full_lt.get_trt_rlzs(trt_smrs))
+        nbytes = 4 * len(self.sitecol) * L * Gt
+        logging.warning(f'The global pmap would require %s ({Gt=})',
+                        general.humansize(nbytes))
+
         # do nothing for atomic sources except counting the ruptures
         atomic_sources = []
         normal_sources = []
@@ -210,11 +227,11 @@ class PreClassicalCalculator(base.HazardCalculator):
             else:
                 normal_sources.extend(sg)
         if multifaults:
+            # this is ultra-fast
             secparams = build_secparams(multifaults[0].get_sections())
-            logging.warning('There are %d multiFaultSources, the preclassical '
-                            'phase will be slow (secparams=%s)',
-                            len(multifaults),
-                            general.humansize(secparams.nbytes))
+            logging.warning(
+                'There are %d multiFaultSources (secparams=%s)',
+                len(multifaults), general.humansize(secparams.nbytes))
         else:
             secparams = ()
         self._process(atomic_sources, normal_sources, sites, secparams)

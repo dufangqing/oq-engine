@@ -175,7 +175,8 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = 1
 # confusion between different installations when the WebUI is used
 SERVER_NAME = socket.gethostname()
 
-APPLICATION_MODES = ['PUBLIC', 'RESTRICTED', 'AELO', 'READ_ONLY']
+APPLICATION_MODES = [
+    'PUBLIC', 'RESTRICTED', 'AELO', 'ARISTOTLE', 'READ_ONLY']
 
 # case insensitive
 APPLICATION_MODE = 'public'
@@ -187,6 +188,8 @@ USE_REVERSE_PROXY = False
 
 # Expose the WebUI interface, otherwise only the REST API will be available
 WEBUI = True
+
+MAX_AELO_SITE_NAME_LEN = 256
 
 # OpenQuake Standalone tools (IPT, Taxtweb, Taxonomy Glossary)
 if STANDALONE and WEBUI:
@@ -220,8 +223,10 @@ except ImportError:
 # NOTE: the OQ_APPLICATION_MODE environment variable, if defined, overrides
 # both the default setting and the one specified in the local settings
 APPLICATION_MODE = os.environ.get('OQ_APPLICATION_MODE', APPLICATION_MODE)
+if not os.environ.get('OQ_APPLICATION_MODE'):
+    os.environ['OQ_APPLICATION_MODE'] = APPLICATION_MODE
 
-if TEST and APPLICATION_MODE.upper() == 'AELO':
+if TEST and APPLICATION_MODE.upper() in ('AELO', 'ARISTOTLE'):
     EMAIL_BACKEND = 'django.core.mail.backends.filebased.EmailBackend'
     # FIXME: this is mandatory, but it writes anyway in /tmp/app-messages.
     #        We should redefine it to a different directory for each test,
@@ -229,12 +234,12 @@ if TEST and APPLICATION_MODE.upper() == 'AELO':
     #        parallel
     EMAIL_FILE_PATH = os.path.join(tempfile.gettempdir(), 'app-messages')
 
-if APPLICATION_MODE.upper() in ('RESTRICTED', 'AELO'):
+if APPLICATION_MODE.upper() in ('RESTRICTED', 'AELO', 'ARISTOTLE'):
     LOCKDOWN = True
 
 STATIC_URL = '%s/static/' % WEBUI_PATHPREFIX
 
-if LOCKDOWN and APPLICATION_MODE == 'AELO':
+if LOCKDOWN and APPLICATION_MODE.upper() in ('AELO', 'ARISTOTLE'):
     # check essential constants are defined
     try:
         EMAIL_BACKEND  # noqa

@@ -15,6 +15,7 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with OpenQuake. If not, see <http://www.gnu.org/licenses/>.
+import io
 import os
 import sys
 import abc
@@ -28,19 +29,19 @@ import traceback
 from datetime import datetime
 from shapely import wkt
 import psutil
-import h5py
 import numpy
 import pandas
+from PIL import Image
 
-from openquake.baselib import general, hdf5
-from openquake.baselib import performance, parallel, python3compat
+from openquake.commands.plot_assets import main as plot_assets
+from openquake.baselib import general, hdf5, python3compat
+from openquake.baselib import performance, parallel
 from openquake.baselib.performance import Monitor
 from openquake.hazardlib import (
     InvalidFile, site, stats, logictree, source_reader)
 from openquake.hazardlib.site_amplification import Amplifier
 from openquake.hazardlib.site_amplification import AmplFunction
 from openquake.hazardlib.calc.filters import SourceFilter, getdefault
-from openquake.hazardlib.calc.disagg import to_rates
 from openquake.hazardlib.source import rupture
 from openquake.hazardlib.shakemap.maps import get_sitecol_shakemap
 from openquake.hazardlib.shakemap.gmfs import to_gmfs
@@ -584,8 +585,7 @@ class HazardCalculator(BaseCalculator):
                 oq, self.datastore.hdf5)
             self.load_crmodel()  # must be after get_site_collection
             self.read_exposure(haz_sitecol)  # define .assets_by_site
-            df = readinput.Global.pmap.to_dframe()
-            df.rate = to_rates(df.rate)
+            df = (~readinput.Global.pmap).to_dframe()
             self.datastore.create_df('_rates', df)
             self.datastore['assetcol'] = self.assetcol
             self.datastore['full_lt'] = fake = logictree.FullLogicTree.fake()
@@ -692,10 +692,9 @@ class HazardCalculator(BaseCalculator):
         .sitecol, .assetcol
         """
         oq = self.oqparam
-        (self.sitecol,
-         self.assetcol,
-         discarded) = readinput.get_sitecol_assetcol(
-            oq, haz_sitecol, self.crmodel.loss_types, self.datastore)
+        self.sitecol, self.assetcol, discarded = \
+            readinput.get_sitecol_assetcol(
+                oq, haz_sitecol, self.crmodel.loss_types, self.datastore)
         # this is overriding the sitecol in test_case_miriam
         self.datastore['sitecol'] = self.sitecol
         if len(discarded):
@@ -788,6 +787,16 @@ class HazardCalculator(BaseCalculator):
             self.datastore.create_df('crm', self.crmodel.to_dframe(),
                                      'gzip', **attrs)
 
+    def _plot_assets(self):
+        if os.environ.get('OQ_APPLICATION_MODE'):
+            plt = plot_assets(self.datastore.calc_id, show=False,
+                              assets_only=True)
+            bio = io.BytesIO()
+            plt.savefig(bio, format='png', bbox_inches='tight')
+            fig_path = 'png/assets.png'
+            logging.info(f'Saving {fig_path} into the datastore')
+            self.datastore[fig_path] = Image.open(bio)
+
     def _read_risk_data(self):
         # read the risk model (if any), the exposure (if any) and then the
         # site collection, possibly extracted from the exposure.
@@ -874,16 +883,29 @@ class HazardCalculator(BaseCalculator):
                         oq.time_event, oq_hazard.time_event))
 
         if oq.job_type == 'risk':
-            taxs = python3compat.decode(self.assetcol.tagcol.taxonomy)
-            tmap = readinput.taxonomy_mapping(self.oqparam, taxs)
+            # the decode below is used in aristotle calculations
+            taxonomies = python3compat.decode(self.assetcol.tagcol.taxonomy[1:])
+            uniq = numpy.unique(self.assetcol['taxonomy'])
+            taxdic = {taxi: taxo for taxi, taxo in enumerate(taxonomies, 1)
+                      if taxi in uniq}
+            if 'ID_0' in self.assetcol.array.dtype.names:
+                # in qa_tests_data/scenario_risk/scenario_risk/conditioned
+                allcountries = numpy.array(self.assetcol.tagcol.ID_0)
+                id0s = numpy.unique(self.assetcol['ID_0'])
+                countries = allcountries[id0s]
+            else:
+                countries = ()
+            tmap = readinput.taxonomy_mapping(oq, taxdic, countries)
             self.crmodel.set_tmap(tmap)
+
             taxonomies = set()
             for ln in oq.loss_types:
-                for items in self.crmodel.tmap[ln]:
-                    for taxo, weight in items:
+                for values in self.crmodel.tmap[ln].values():
+                    for taxo, weight in values:
                         if taxo != '?':
                             taxonomies.add(taxo)
             # check that we are covering all the taxonomies in the exposure
+            # (exercised in test_missing_taxonomy)
             missing = taxonomies - set(self.crmodel.taxonomies)
             if self.crmodel and missing:
                 raise RuntimeError(
@@ -957,6 +979,7 @@ class HazardCalculator(BaseCalculator):
             save_agg_values(
                 self.datastore, self.assetcol, oq.loss_types,
                 oq.aggregate_by, oq.max_aggregations)
+            self._plot_assets()
 
     def store_rlz_info(self, rel_ruptures):
         """
@@ -1051,8 +1074,9 @@ class RiskCalculator(HazardCalculator):
             raise ValueError('The IMTs in the risk models (%s) are disjoint '
                              "from the IMTs in the hazard (%s)" % (rsk, haz))
         if not hasattr(self.crmodel, 'tmap'):
-            self.crmodel.tmap = readinput.taxonomy_mapping(
-                self.oqparam, self.assetcol.tagcol.taxonomy)
+            taxonomies = self.assetcol.tagcol.taxonomy[1:]
+            taxdic = {i: taxo for i, taxo in enumerate(taxonomies, 1)}
+            self.crmodel.tmap = readinput.taxonomy_mapping(self.oqparam, taxdic)
         with self.monitor('building riskinputs'):
             if self.oqparam.hazard_calculation_id:
                 dstore = self.datastore.parent
@@ -1227,11 +1251,18 @@ def import_gmfs_hdf5(dstore, oqparam):
     :param oqparam: an OqParam instance
     :returns: event_ids
     """
-    # NB: you cannot access an external link if the file it points to is
+    # NB: once we tried to use ExternalLinks to avoid copying the GMFs,
+    # but: you cannot access an external link if the file it points to is
     # already open, therefore you cannot run in parallel two calculations
-    # starting from the same GMFs
-    dstore['gmf_data'] = h5py.ExternalLink(oqparam.inputs['gmfs'], "gmf_data")
-    dstore['complete'] = h5py.ExternalLink(oqparam.inputs['gmfs'], "sitecol")
+    # starting from the same GMFs; moreover a calc_XXX.hdf5 downloaded
+    # from the webui would be small but orphan of the GMFs; moreover
+    # users changing the name of the external file or changing the
+    # ownership would break calc_XXX.hdf5; therefore we copy everything
+    # even if bloated (also because of SURA issues having the external
+    # file under NFS and calc_XXX.hdf5 in the local filesystem)
+    with hdf5.File(oqparam.inputs['gmfs'], 'r') as f:
+        f.copy('gmf_data', dstore.hdf5)
+        dstore['sitecol'] = f['sitecol']  # complete by construction
     attrs = _getset_attrs(oqparam)
     oqparam.hazard_imtls = {imt: [0] for imt in attrs['imts']}
 

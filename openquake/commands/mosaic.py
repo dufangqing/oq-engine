@@ -23,15 +23,18 @@ import json
 import logging
 import getpass
 import cProfile
-import numpy
 import pandas
 import collections
 from openquake.baselib import config, performance
+from openquake.qa_tests_data import mosaic
 from openquake.commonlib import readinput, logs, datastore
 from openquake.calculators import views
 from openquake.engine import engine
+from openquake.engine.aristotle import get_trts_around
 from openquake.engine.aelo import get_params_from
 from openquake.hazardlib.geo.utils import geolocate
+
+FAMOUS = os.path.join(os.path.dirname(mosaic.__file__), 'famous_ruptures.csv')
 
 
 def engine_profile(jobctx, nrows):
@@ -46,17 +49,23 @@ def engine_profile(jobctx, nrows):
 
 def fix(asce, siteid):
     dic = json.loads(asce.decode('ascii'))
-    dic = {k: numpy.nan if isinstance(v, str) else round(v, 2)
+    dic = {k: v if isinstance(v, str) else round(v, 2)
            for k, v in dic.items()}
     dic['siteid'] = siteid
     return dic
 
 
-def get_asce41(calc_id, ids):
+def get_from(calc_id, key, ids):
+    """
+    :param calc_id: calculation ID
+    :param key: "asce41" or "asce07"
+    :param ids: site IDs
+    :returns: a list of dictionaries, one per site
+    """
     dstore = datastore.read(calc_id)
     model = dstore['oqparam'].description[9:12]
     return [fix(a, model + str(id))
-            for id, a in zip(ids[model], dstore['asce41'])]
+            for id, a in zip(ids[model], dstore[key])]
 
 
 # ########################## run_site ############################## #
@@ -123,7 +132,7 @@ def from_file(fname, mosaic_dir, concurrent_jobs):
     engine.run_jobs(logctxs, concurrent_jobs=concurrent_jobs)
     out = []
     count_errors = 0
-    results = []
+    a07dics, a41dics = [], []
     for logctx in logctxs:
         job = logs.dbcmd('get_job', logctx.calc_id)
         tb = logs.dbcmd('get_traceback', logctx.calc_id)
@@ -131,9 +140,10 @@ def from_file(fname, mosaic_dir, concurrent_jobs):
         if tb:
             count_errors += 1
         try:
-            results.extend(get_asce41(logctx.calc_id, ids))
+            a07dics.extend(get_from(logctx.calc_id, 'asce07', ids))
+            a41dics.extend(get_from(logctx.calc_id, 'asce41', ids))
         except KeyError:
-            # asce41 could not be computed due to some error
+            # AELO results could not be computed due to some error
             continue
 
     # printing/saving results
@@ -141,15 +151,16 @@ def from_file(fname, mosaic_dir, concurrent_jobs):
     print(views.text_table(out, header, ext='org'))
     dt = (time.time() - t0) / 60
     print('Total time: %.1f minutes' % dt) 
-    if not results:
+    if not a07dics or not a41dics:
         # serious problem to debug
         breakpoint()
-    header = sorted(results[0])
-    rows = [[row[k] for k in header] for row in results]
-    fname = os.path.abspath('asce41.csv')
-    with open(fname, 'w') as f:
-        print(views.text_table(rows, header, ext='csv'), file=f)
-    print(f'Stored {fname}')
+    for name, dics in zip(['asce07', 'asce41'], [a07dics, a41dics]):
+        header = sorted(dics[0])
+        rows = [[dic[k] for k in header] for dic in dics]
+        fname = os.path.abspath(name + '.csv')
+        with open(fname, 'w') as f:
+            print(views.text_table(rows, header, ext='csv'), file=f)
+        print(f'Stored {fname}')
     if count_errors:
         sys.exit(f'{count_errors} error(s) occurred')
 
@@ -265,7 +276,43 @@ sample_rups.extreme_gmv = 'threshold above which a GMV is extreme'
 sample_rups.gmfs = 'compute GMFs'
 sample_rups.slowest = 'profile and show the slowest operations'
 
+
+def aristotle(mosaic_dir='', rupfname=FAMOUS):
+    """
+    Run Aristotle calculations starting from a file with planar
+    ruptures (by default "famous_ruptures.csv"). You must pass
+    a directory containing two files site_model.hdf5 and exposure.hdf5
+    with a well defined structure.
+    """
+    if not mosaic_dir and not config.directory.mosaic_dir:
+        sys.exit('mosaic_dir is not specified in openquake.cfg')
+    mosaic_dir = mosaic_dir or config.directory.mosaic_dir
+    smodel = os.path.join(mosaic_dir, 'site_model.hdf5')
+    expo = os.path.join(mosaic_dir, 'exposure.hdf5')
+    for i, row in pandas.read_csv(rupfname).iterrows():
+        rupdic = row.to_dict()
+        usgs_id = rupdic['rupture_usgs_id']
+        logging.warning('Processing %s', usgs_id)
+        trts = get_trts_around(rupdic['lon'], rupdic['lat'])
+        rupdic = str(rupdic)
+        inputs = {'exposure': [expo], 'site_model': [smodel],
+                  'job_ini': '<in-memory>'}
+        dic = dict(calculation_mode='scenario_risk',
+                   description=usgs_id, rupture_dict=rupdic,
+                   maximum_distance='200', number_of_ground_motion_fields='100',
+                   tectonic_region_type=trts[0], inputs=inputs)
+        logging.root.handlers = []  # avoid breaking the logs
+        jobs = engine.create_jobs([dic], config.distribution.log_level,
+                                  None, getpass.getuser(), None)
+        try:
+            engine.run_jobs(jobs)
+        except:
+            pass
+
+aristotle.mosaic_dir = 'Directory containing site_model.hdf5 and exposure.hdf5'
+aristotle.rupfname = 'Filename with planar ruptures'
+    
 # ################################## main ################################## #
 
-main = dict(run_site=run_site,
+main = dict(run_site=run_site, aristotle=aristotle,
             sample_rups=sample_rups)

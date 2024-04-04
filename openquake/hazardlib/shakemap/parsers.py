@@ -201,9 +201,34 @@ def get_array_usgs_xml(kind, grid_url, uncertainty_url=None):
             'USGS xml grid file could not be found at %s' % grid_url) from e
 
 
+def get_rupture_dict(id):
+    """
+    Download a rupture from the USGS site given a ShakeMap ID.
+
+    :param id: ShakeMap ID
+    :returns: a dictionary with keys lon, lat, dep, mag, rake
+    """
+    url = SHAKEMAP_URL.format(id)
+    logging.info('Downloading %s', url)
+    js = json.loads(urlopen(url).read())
+    for shakemap in reversed(js['properties']['products']['shakemap']):
+        contents = shakemap['contents']
+        if 'download/rupture.json' in contents:
+            break
+    else:
+        raise MissingLink('There is not rupture.json for %s' % id)
+    url = contents.get('download/rupture.json')['url']
+    md = json.loads(urlopen(url).read())['metadata']
+    return {'lon': md['lon'], 'lat': md['lat'], 'dep': md['depth'],
+            'mag': md['mag'], 'rake': md['rake']}
+
+
 def get_array_usgs_id(kind, id):
     """
-    Download a ShakeMap from the USGS site
+    Download a ShakeMap from the USGS site.
+
+    :param kind: the string "usgs_id", for API compatibility
+    :param id: ShakeMap ID
     """
     url = SHAKEMAP_URL.format(id)
     logging.info('Downloading %s', url)
