@@ -126,7 +126,7 @@ def classical(sources, sitecol, cmaker, dstore, monitor):
     with dstore:
         if tiling:  # tiling calculator, read the sources from the datastore
             gid = sources
-            with monitor('reading sources'):  # fast, but uses a lot of RAM
+            with monitor('reading sources'):  # fast, can use a lot of RAM
                 arr = dstore.getitem('_csm')[cmaker.grp_id]
                 sources = pickle.loads(zlib.decompress(arr.tobytes()))
         else:  # regular calculator
@@ -158,7 +158,9 @@ def classical(sources, sitecol, cmaker, dstore, monitor):
             pmap = ProbabilityMap(
                 sites.sids, cmaker.imtls.size, len(cmaker.gsims)).fill(
                     cmaker.rup_indep)
-            result = hazclassical(sources, sites, cmaker, pmap)
+            with monitor('result') as m:
+                result = hazclassical(sources, sites, cmaker, pmap)
+            print('----------------', m)
             result['pnemap'] = to_rates(~pmap, gid, tiling, disagg_by_src)
             yield result
 
