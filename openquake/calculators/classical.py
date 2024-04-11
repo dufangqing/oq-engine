@@ -583,15 +583,19 @@ class ClassicalCalculator(base.HazardCalculator):
             cm.rup_indep = getattr(sg, 'rup_interdep', None) != 'mutex'
             cm.pmap_max_mb = float(config.memory.pmap_max_mb)
             gid = self.gids[cm.grp_id][0]
-            if sg.atomic or sg.weight <= maxw:
+            if sg.atomic:
                 allargs.append((gid, self.sitecol, cm, ds))
             else:
-                tiles = self.sitecol.split(numpy.ceil(sg.weight / maxw))
+                no = numpy.ceil(sg.weight / maxw)
+                if no == 1:
+                    no = 2
+                tiles = self.sitecol.split(no)
                 logging.info('Group #%d, %d tiles', cm.grp_id, len(tiles))
                 for tile in tiles:
                     allargs.append((gid, tile, cm, ds))
                     self.ntiles.append(len(tiles))
-        logging.warning('Generated at most %d tiles', max(self.ntiles))
+        if self.ntiles:
+            logging.warning('Generated at most %d tiles', max(self.ntiles))
         self.datastore.swmr_on()  # must come before the Starmap
         mon = self.monitor('storing rates')
         for dic in parallel.Starmap(classical, allargs, h5=self.datastore.hdf5):
