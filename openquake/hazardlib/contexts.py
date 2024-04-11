@@ -1202,6 +1202,7 @@ class ContextMaker(object):
 
         The rup_mutex dictionary is read-only and normally empty
         """
+        print('---------------', sum(ctx.nbytes for ctx in ctxs)/ 1024**2)
         rup_indep = len(rup_mutex) == 0
         if tom is None:
             itime = -1.  # test_hazard_curve_X
